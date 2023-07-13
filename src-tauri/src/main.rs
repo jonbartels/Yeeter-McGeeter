@@ -5,6 +5,7 @@ use std::process::{Command, exit};
 use std::sync::Arc;
 use anyhow::Error;
 use home::env::Env;
+use serde_json::Number;
 use tauri::State;
 
 use crate::con::{ConnectionEntry, ConnectionStore};
@@ -23,25 +24,31 @@ fn launch(id: &str, cs: State<ConnectionStore>, wc: State<WebStartCache>) -> Str
         if let None = ws {
             let tmp = WebstartFile::load(&ce.address);
             if let Err(e) = tmp {
-                return e.to_string();
+                let msg = e.to_string();
+                println!("{}", msg);
+                return  create_json_resp(-1, &msg);
             }
 
             ws = Some(Arc::new(tmp.unwrap()));
         }
         let ws = ws.unwrap();
         if ce.verify {
-            let verification_status = ws.verify(cs.get_cert_store());
+            let verification_status = ws.verify(cs.get_cert_store().as_ref());
             if let Err(e) = verification_status {
-
+                let resp = e.to_json();
+                println!("{}", resp);
+                return resp;
             }
         }
         let r = ws.run(ce);
         if let Err(e) = r {
-            return  e.to_string();
+            let msg = e.to_string();
+            println!("{}", msg);
+            return  create_json_resp(-1, &msg);
         }
     }
 
-    String::from("success")
+    String::from("{\"code\": 0}")
 }
 
 #[tauri::command]
@@ -82,6 +89,15 @@ fn import(file_path: &str, cs: State<ConnectionStore>) -> String {
     r.unwrap()
 }
 
+#[tauri::command(rename_all = "snake_case")]
+fn trust_cert(cert: &str, cs: State<ConnectionStore>) -> String {
+    let r = cs.add_trusted_cert(cert);
+    if let Err(e) = r {
+        return e.to_string();
+    }
+    String::from("success")
+}
+
 fn main() {
     fix_path_env::fix();
     let hd = home::home_dir().expect("unable to find the path to home directory");
@@ -96,7 +112,14 @@ fn main() {
     tauri::Builder::default()
         .manage(cs.unwrap())
         .manage(wc)
-        .invoke_handler(tauri::generate_handler![launch, import, delete, save, load_connections])
+        .invoke_handler(tauri::generate_handler![launch, import, delete, save, load_connections, trust_cert])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn create_json_resp(code: i32, msg: &str) -> String {
+    let mut obj = serde_json::Map::new();
+    obj.insert("code".to_string(), serde_json::Value::Number(Number::from(code)));
+    obj.insert("msg".to_string(), serde_json::Value::String(String::from(msg)));
+    serde_json::to_string(&obj).unwrap()
 }

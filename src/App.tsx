@@ -2,6 +2,7 @@ import React, {useEffect, useState} from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open, confirm } from '@tauri-apps/api/dialog';
 import "./App.css";
+import './CertDialog'
 import {
     Avatar,
     Button,
@@ -13,12 +14,13 @@ import {
     Menu,
     MenuProps,
     Row,
-    notification,
     theme,
-    Upload
+    Modal,
+    Checkbox, Spin, notification
 } from "antd";
 import { ApiOutlined, EyeInvisibleOutlined, EyeTwoTone, SettingOutlined } from "@ant-design/icons";
-import type { NotificationPlacement } from 'antd/es/notification/interface';
+import CertDialog, {UntrustedCert} from "./CertDialog";
+import {NotificationPlacement} from "antd/es/notification/interface";
 
 const { Content, Sider } = Layout;
 
@@ -30,7 +32,8 @@ interface Connection {
     javaHome: string,
     name: string,
     username: string,
-    password: string
+    password: string,
+    verify: boolean
 }
 
 function connectionSorter(c1: Connection, c2: Connection) {
@@ -73,16 +76,14 @@ function App() {
     const {
         token: { colorBgContainer },
     } = theme.useToken();
-    // const [api, contextHolder] = notification.useNotification();
-    // const openNotification = (placement: NotificationPlacement, msg: string) => {
-    //     api.info({
-    //         message: `Notification ${placement}`,
-    //         description: <Context.Consumer>{({ name }) => `${msg}`}</Context.Consumer>,
-    //         placement,
-    //     });
-    // };
-
-    //const store = useResourceSearchStore();
+    const [api, contextHolder] = notification.useNotification();
+    const openNotification = (placement: NotificationPlacement, msg: string) => {
+        api.info({
+            message: `Error`,
+            description: <Context.Consumer>{({ name }) => `${msg}`}</Context.Consumer>,
+            placement
+        });
+    };
 
     const [data, setData] = useState<Connection[]>([]);
 
@@ -94,11 +95,20 @@ function App() {
         javaHome: "",
         name: "",
         username: "",
-        password: ""};
+        password: "",
+        verify: true};
 
     const [cc, setCc] = useState<Connection>({...emptyConnection});
 
     const [dirty, setDirty] = useState<boolean>(false);
+
+    const [cert, setCert] = useState<UntrustedCert>({
+        der: undefined,
+        subject: undefined,
+        issuer: undefined,
+        expires_on: undefined
+    });
+    const [loading, setLoading] = useState(false);
 
     useEffect(() => {loadConnections().then(d => {
         setData(d);
@@ -139,8 +149,30 @@ function App() {
     }
 
     async function launch() {
-        await invoke("launch", { id: cc.id });
-        //openNotification('topLeft', msg);
+        setLoading(true);
+        try {
+            let resp: string = await invoke("launch", { id: cc.id });
+            let result: any = JSON.parse(resp);
+            if(result.code == 1) {
+                setCert(result.cert);
+            }
+            setLoading(false);
+            if(result.code == -1) {
+                openNotification('topRight', result.msg);
+            }
+        }
+        catch (e) {
+            setLoading(false);
+        }
+    }
+
+    async function trustAndLaunch() {
+        await invoke("trust_cert", { cert: cert.der });
+        setCert({});
+        launch();
+    }
+    function abortLaunch() {
+        setCert({});
     }
     function createNew() {
         setCc({...emptyConnection})
@@ -199,6 +231,14 @@ function App() {
         setDirty(true);
     }
 
+    function updateVerify(e: any) {
+        setCc({
+            ...cc,
+            verify: e.target.checked
+        })
+        setDirty(true);
+    }
+
     async function deleteConnection() {
         const confirmed = await confirm('Do you want to delete connection ' + cc.name + '?', { title: '', type: 'warning' });
         if(confirmed) {
@@ -246,9 +286,12 @@ function App() {
     }
 
     return (
-        <Layout className='layout' style={{ height: '90vh' }}>
-            <Sider width={'30%'} style={{ height: '400' }} theme={"light"} >
-                <div style={{overflow: 'auto', height: '79%'}}>
+        <Context.Provider value={{name: ""}}>
+        {contextHolder}
+        <Spin spinning={loading}>
+        <Layout className='layout' style={{ height: '97vh' }}>
+            <Sider width={'30%'} style={{ height: '470' }} theme={"light"} >
+                <div style={{overflow: 'auto', height: '90%'}}>
                     <List header={<span style={{ margin: '34%', fontSize: 15, color: 'brown'}}>Connections</span>}
                           size="small"
                           dataSource={data}
@@ -263,7 +306,6 @@ function App() {
                           )}
                     />
                 </div>
-                <Divider />
                 <Row align={'middle'} style={{height: '5'}} gutter={[24, 3]}>
                     <Col>
                         <Menu theme="light" mode="horizontal" triggerSubMenuAction="click" items={items} onClick={handleMenuClick} />
@@ -314,6 +356,9 @@ function App() {
                             <Col span={12}>
                                 <Input placeholder={"e.g. 512m or 2g "} size={"middle"} bordered value={cc.heapSize} onChange={updateHeapSize} />
                             </Col>
+                            <Col>
+                                <Checkbox checked={cc.verify} onChange={updateVerify}>Verify JAR files</Checkbox>
+                            </Col>
                         </Row>
                         <Row>
                             <Col span={20} style={{ marginTop: 20, alignContent: "end" }}>
@@ -324,9 +369,12 @@ function App() {
                             <Col style={{ alignContent: "end" }}><Button type={"primary"} danger onClick={deleteConnection} disabled={cc.id == ""}>Delete</Button></Col>
                         </Row>
                     </div>
+                    <CertDialog trustAndLaunch={trustAndLaunch} abortLaunch={abortLaunch} cert={cert}/>
                 </Content>
             </Layout>
         </Layout>
+        </Spin>
+        </Context.Provider>
     );
 }
 
