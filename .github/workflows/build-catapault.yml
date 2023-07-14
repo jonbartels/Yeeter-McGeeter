@@ -1,6 +1,6 @@
 name: Release
 on:
-  pull:
+  pull_request:
     paths-ignore:
       - '*.md'
   push:
