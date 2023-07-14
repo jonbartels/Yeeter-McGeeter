@@ -1,6 +1,11 @@
 name: Release
 on:
+  pull:
+    paths-ignore:
+      - *.md
   push:
+    paths-ignore:
+      - *.md
     tags:
       - 'v*'
   workflow_dispatch:
