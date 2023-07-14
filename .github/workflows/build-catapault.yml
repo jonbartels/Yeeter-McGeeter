@@ -2,10 +2,10 @@ name: Release
 on:
   pull:
     paths-ignore:
-      - *.md
+      - '*.md'
   push:
     paths-ignore:
-      - *.md
+      - '*.md'
     tags:
       - 'v*'
   workflow_dispatch:
