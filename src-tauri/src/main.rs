@@ -1,10 +1,8 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::process::{Command, exit};
+use std::process::{exit};
 use std::sync::Arc;
-use anyhow::Error;
-use home::env::Env;
 use serde_json::Number;
 use tauri::State;
 

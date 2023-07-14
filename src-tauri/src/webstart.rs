@@ -1,19 +1,17 @@
 use std::fs::File;
-use std::os;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::{SystemTime};
 
 use anyhow::Error;
 use openssl::x509::store::X509StoreRef;
 use reqwest::blocking::{Client, ClientBuilder};
-use reqwest::Url;
-use roxmltree::{Document, Node};
+use roxmltree::{Node};
 use rustc_hash::FxHashMap;
 use sha2::{Digest, Sha256};
 
-use crate::connection::{ConnectionEntry, ConnectionStore};
+use crate::connection::{ConnectionEntry};
 use crate::errors::VerificationError;
 use crate::verify::verify_jar;
 
