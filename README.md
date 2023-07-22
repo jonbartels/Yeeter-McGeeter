@@ -30,6 +30,15 @@ Should be very similar to MacOS.
 
 ### Windows 
 
-Please make a PR if you use Windows and know how to compile the app
+Please make a PR if you use Windows and know how to compile the app!
 
-Needs gcc mingw?
+___Follow the instructions at___: https://tauri.app/v1/guides/getting-started/prerequisites/#setting-up-windows
+
+Follow the openssl instructions at: https://docs.rs/crate/openssl/0.9.24 *EXCEPT* you have to use different commands to set env vars in PowerShell:
+```
+$env:OPENSSL_DIR='C:\Program Files\OpenSSL-Win64\'
+$env:OPENSSL_INCLUDE_DIR='C:\Program Files\OpenSSL-Win64\include'
+$env:OPENSSL_LIB_DIR='C:\Program Files\OpenSSL-Win64\lib'
+$env:OPENSSL_NO_VENDOR=1
+Get-ChildItem Env
+```
