@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::{env, os};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -7,11 +8,11 @@ use std::time::{SystemTime};
 use anyhow::Error;
 use openssl::x509::store::X509StoreRef;
 use reqwest::blocking::{Client, ClientBuilder};
-use roxmltree::{Node};
+use roxmltree::Node;
 use rustc_hash::FxHashMap;
 use sha2::{Digest, Sha256};
 
-use crate::connection::{ConnectionEntry};
+use crate::connection::{ConnectionEntry, ConnectionStore};
 use crate::errors::VerificationError;
 use crate::verify::verify_jar;
 
@@ -20,14 +21,17 @@ pub struct WebstartFile {
     url: String,
     main_class: String,
     args: Vec<String>,
+    j2ses: Option<Vec<J2se>>,
     //jars: Vec<Jar>,
     tmp_dir: PathBuf,
     loaded_at: SystemTime
 }
 
-pub struct Jar {
-    url: String,
-    hash: String
+/// from jnlp -> resources -> j2se
+#[derive(Debug)]
+pub struct J2se {
+    java_vm_args: Option<String>,
+    version: String
 }
 
 pub struct WebStartCache {
@@ -79,45 +83,54 @@ impl WebstartFile {
         hasher.update(&webstart);
         let hash = hasher.finalize();
         let hash = hex::encode(&hash);
-        let tmp_dir = PathBuf::from(format!("/tmp/catapult/{}", hash));
+        let tmp_dir = env::temp_dir().join(format!("catapult/{}", hash));
+        println!("creating directory {:?}", tmp_dir);
         if tmp_dir.exists() {
             std::fs::remove_dir_all(&tmp_dir)?;
         }
         let dir_path = tmp_dir.as_path();
         std::fs::create_dir_all(dir_path)?;
 
+        let mut j2ses = None;
         if let Some(resources_node) = resources_node {
+            j2ses = get_j2ses(&resources_node);
             download_jars(&resources_node, &client, dir_path, base_url)?;
         }
 
         let loaded_at = SystemTime::now();
-        let ws = WebstartFile{url: base_url.to_string(), main_class, tmp_dir, args, loaded_at};
+        let ws = WebstartFile{url: base_url.to_string(), main_class, tmp_dir, args, loaded_at, j2ses};
 
         Ok(ws)
     }
 
     pub fn run(&self, ce: Arc<ConnectionEntry>) -> Result<(), Error> {
         let itr = self.tmp_dir.read_dir()?;
-        let mut classpath = String::with_capacity(1024);
-        let mut rhino_classpath = String::with_capacity(128);
+        let mut classpath = String::with_capacity(1152);
+        let mut classpath_suffix = String::with_capacity(1024);
         for e in itr {
             let e = e?;
+            if e.metadata().unwrap().is_dir() {
+                continue;
+            }
             let file_path = e.path();
+            let file_name = file_path.file_name().unwrap();
             let file_path = file_path.as_os_str();
             let file_path = file_path.to_str().unwrap();
             //println!("{}", file_path);
+            // MirthConnect's own jars contain some overridden classes
+            // of the dependent libraries and hence must be loaded first
             // https://forums.mirthproject.io/forum/mirth-connect/support/15524-using-com-mirth-connect-client-core-client
-            if file_path.to_lowercase().contains("rhino") {
-                rhino_classpath.push_str(file_path);
-                rhino_classpath.push(':');
-            }
-            else {
+            if file_name.to_str().unwrap().starts_with("mirth") {
                 classpath.push_str(file_path);
                 classpath.push(':');
             }
+            else {
+                classpath_suffix.push_str(file_path);
+                classpath_suffix.push(':');
+            }
         }
 
-        classpath.push_str(&rhino_classpath);
+        classpath.push_str(&classpath_suffix);
 
         //println!("class path: {}", classpath);
         let mut cmd;
@@ -130,6 +143,20 @@ impl WebstartFile {
         }
 
         println!("using java from: {:?}", cmd.get_program().to_str());
+
+        if let Some(ref vm_args) = self.j2ses {
+            for va in vm_args {
+                // if there are VM args for java version >= 1.9
+                // then set the JDK_JAVA_OPTIONS environment variable
+                // this will be ignored by java version <= 1.8
+                if va.version.contains("1.9") {
+                    if let Some(java_vm_args) = &va.java_vm_args {
+                        println!("setting JDK_JAVA_OPTIONS environment variable with the java-vm-args given for version {} in JNLP file", va.version);
+                        cmd.env("JDK_JAVA_OPTIONS", java_vm_args);
+                    }
+                }
+            }
+        }
 
         let heap = ce.heap_size.trim();
         if !heap.is_empty() {
@@ -148,7 +175,9 @@ impl WebstartFile {
             }
         }
 
-        let f = File::create("/tmp/catapult.log")?;
+        let log_file_path = env::temp_dir().join("catapult.log");
+        println!("log_file_path {:?}", log_file_path);
+        let f = File::create(log_file_path)?;
         cmd.stdout(Stdio::from(f));
         cmd.spawn()?;
         Ok(())
@@ -222,6 +251,26 @@ fn get_client_args(root: &Node) -> Vec<String> {
         }
     }
     args
+}
+
+fn get_j2ses(resources: &Node) -> Option<Vec<J2se>> {
+    let mut j2ses = Vec::new();
+    for n in resources.descendants() {
+        if n.has_tag_name("j2se") {
+            // only consider those that have java-vm-args and version
+            if let Some(java_vm_args) = n.attribute("java-vm-args") {
+                if let Some(version) = n.attribute("version") {
+                    let java_vm_args = Some(java_vm_args.to_string());
+                    let j2se = J2se{ java_vm_args, version: version.to_string()};
+                    j2ses.push(j2se);
+                }
+            }
+        }
+    }
+    if !j2ses.is_empty() {
+        return Some(j2ses);
+    }
+    None
 }
 
 fn get_node<'a>(root: &'a Node, tag_name: &str) -> Option<Node<'a, 'a>> {
